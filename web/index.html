@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llm-feed</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>llm-feed</h1>
+  <div class="status">
+    <span id="dot" class="dot"></span>
+    <span id="statustext">connecting…</span>
+    <span class="sep">·</span>
+    <span id="count">0 items</span>
+    <span class="sep">·</span>
+    <label class="auto"><input type="checkbox" id="autoscroll"> jump to newest</label>
+  </div>
+</header>
+
+<main id="feed"><div class="empty" id="empty">No items yet. The agent will push montages &amp; images here.</div></main>
+
+<!-- Montage lightbox: zoom into one frame, flip through with ←/→ or buttons -->
+<div id="lightbox" class="lightbox hidden">
+  <div class="lb-bar">
+    <span id="lb-title"></span>
+    <span class="lb-spacer"></span>
+    <span id="lb-counter"></span>
+    <button id="lb-close" title="close (Esc)">✕</button>
+  </div>
+  <button id="lb-prev" class="lb-nav lb-prev" title="previous (←)">‹</button>
+  <img id="lb-img" alt="">
+  <button id="lb-next" class="lb-nav lb-next" title="next (→)">›</button>
+  <div id="lb-label" class="lb-label"></div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

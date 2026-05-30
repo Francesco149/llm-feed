@@ -1,0 +1,5 @@
+# Runtime feed store — pushed items + copied assets are session data, not source.
+data/
+__pycache__/
+*.pyc
+*.log
