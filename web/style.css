@@ -43,6 +43,21 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 
 .card img.single { max-width: 100%; border-radius: 5px; border: 1px solid var(--line); display: block; }
 
+/* click-to-copy anchor id */
+.anchor { color: var(--accent); cursor: pointer; border-bottom: 1px dotted var(--accent);
+          padding-bottom: 1px; }
+.anchor:hover { background: rgba(122,168,255,.12); }
+.anchor.copied { color: var(--ok); border-color: var(--ok); }
+
+/* comparison panels — click-to-reveal amplified diff (mirrors index.html) */
+.cap { margin: 0 0 12px; }
+.atlas-wrap { position: relative; width: 100%; height: 0; overflow: hidden;
+              border: 1px solid var(--line); border-radius: 4px; cursor: zoom-in;
+              padding-bottom: var(--r0); transition: padding-bottom .18s ease; }
+.atlas-wrap.open { padding-bottom: var(--tot); cursor: zoom-out; }
+.atlas-wrap img { position: absolute; top: 0; left: 0; width: 100%; display: block; }
+.capcap { color: var(--muted); font-size: 11px; margin: 4px 2px 0; font-family: ui-monospace, monospace; }
+
 .grid { display: grid; gap: 4px; }
 .tile { position: relative; cursor: zoom-in; border: 1px solid var(--line);
         border-radius: 4px; overflow: hidden; background: #000; }

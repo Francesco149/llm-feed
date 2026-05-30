@@ -26,13 +26,42 @@ function el(tag, cls, text) {
   return e;
 }
 
+function copyAnchor(id, node) {
+  const done = () => {
+    const old = node.textContent;
+    node.textContent = "copied ✓";
+    node.classList.add("copied");
+    setTimeout(() => { node.textContent = old; node.classList.remove("copied"); }, 900);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(id).then(done).catch(done);
+  } else {
+    // Fallback for non-secure contexts.
+    const t = document.createElement("textarea");
+    t.value = id; document.body.appendChild(t); t.select();
+    try { document.execCommand("copy"); } catch (_) {}
+    t.remove(); done();
+  }
+}
+
 function cardHeader(entry) {
   const h = el("h2");
   h.appendChild(el("span", "badge", entry.type));
   h.appendChild(document.createTextNode(entry.title || "(untitled)"));
-  const meta = el("div", "meta",
-    `${fmtTime(entry.iso)} · ${entry.id}` +
-    (entry.type === "montage" ? ` · ${entry.frames.length} frames · ${entry.cols} cols` : ""));
+
+  const meta = el("div", "meta");
+  meta.appendChild(document.createTextNode(fmtTime(entry.iso) + " · "));
+  const anchor = el("span", "anchor", entry.id);
+  anchor.title = "click to copy this anchor id (paste it back to refer to this push)";
+  anchor.addEventListener("click", () => copyAnchor(entry.id, anchor));
+  meta.appendChild(anchor);
+
+  let extra = "";
+  if (entry.type === "montage")
+    extra = ` · ${entry.frames.length} frames · ${entry.cols} cols`;
+  else if (entry.type === "comparison")
+    extra = ` · ${entry.panels.length} panels · ${entry.left_label} | ${entry.right_label}`;
+  if (extra) meta.appendChild(document.createTextNode(extra));
   return [h, meta];
 }
 
@@ -74,9 +103,42 @@ function renderMontage(entry) {
   return card;
 }
 
+function renderComparison(entry) {
+  const card = el("div", "card");
+  cardHeader(entry).forEach(n => card.appendChild(n));
+  if (entry.note) card.appendChild(el("div", "note", entry.note));
+
+  entry.panels.forEach(p => {
+    const cap = el("div", "cap");
+    // Wrapper clipped to row 0 ([left|right]); click expands to the full atlas
+    // (revealing the diff row). The <img> is the whole atlas, so the browser's
+    // "Copy Image" yields the 3-up montage regardless of the CSS clip.
+    const wrap = el("div", "atlas-wrap");
+    wrap.style.setProperty("--r0", p.row0_pct + "%");
+    wrap.style.setProperty("--tot", p.total_pct + "%");
+    const img = el("img");
+    img.src = "/" + p.src;
+    img.loading = "lazy";
+    img.alt = p.label || "";
+    wrap.appendChild(img);
+    wrap.addEventListener("click", () => wrap.classList.toggle("open"));
+    cap.appendChild(wrap);
+
+    let stat = "";
+    if (p.differ_px === 0) stat = " · bit-identical";
+    else if (p.differ_px != null) stat = ` · ${p.differ_px} px differ · mean|abs|/ch ${p.meanabs}`;
+    cap.appendChild(el("div", "capcap",
+      `${p.label} · ${entry.left_label} | ${entry.right_label}${stat}` +
+      ` · click to reveal diff · right-click → Copy Image for 3-up`));
+    card.appendChild(cap);
+  });
+  return card;
+}
+
 function renderEntry(entry) {
-  if (entry.type === "image")   return renderImage(entry);
-  if (entry.type === "montage") return renderMontage(entry);
+  if (entry.type === "image")      return renderImage(entry);
+  if (entry.type === "montage")    return renderMontage(entry);
+  if (entry.type === "comparison") return renderComparison(entry);
   // Unknown/future type: show its title + a raw note so nothing is silently dropped.
   const card = el("div", "card");
   cardHeader(entry).forEach(n => card.appendChild(n));

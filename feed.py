@@ -124,6 +124,7 @@ def cmd_image(args) -> int:
         "title": args.title or src.name,
         "note":  args.note or "",
         "src":   url,
+        "source": str(src.resolve()),   # original path, for `feed.py get`
     }
     _append(entry)
     print(f"pushed image '{entry['title']}' → {_feed_url()}")
@@ -174,7 +175,8 @@ def cmd_montage(args) -> int:
         else:
             n = _frame_no(fp)
             label = f"f={n}" if n >= 0 else fp.stem
-        frame_entries.append({"src": url, "label": label, "name": fp.name})
+        frame_entries.append({"src": url, "label": label, "name": fp.name,
+                              "source": str(fp.resolve())})
 
     entry = {
         "id":     item_id,
@@ -185,10 +187,104 @@ def cmd_montage(args) -> int:
         "note":   args.note or "",
         "cols":   int(args.cols),
         "frames": frame_entries,
+        # Original source location(s), for `feed.py get <id>` retrieval.
+        "frames_dir": str(Path(args.frames_dir).resolve()) if args.frames_dir else "",
     }
     _append(entry)
     print(f"pushed montage '{entry['title']}' "
           f"({len(frames)} frames, {args.cols} cols) → {_feed_url()}")
+    return 0
+
+
+# ─── push: comparison (port|retail with click-to-reveal amplified diff) ──────
+
+
+def cmd_comparison(args) -> int:
+    """Push a `comparison` item — behaves like runs/comparisons/index.html.
+
+    The diff math (PIL/numpy) lives in the producer, so this just ingests a
+    JSON spec of pre-built atlas PNGs + their geometry. Spec schema:
+
+      {
+        "title": "...", "note": "...",
+        "left_label": "openrecet", "right_label": "retail",
+        "panels": [
+          {"atlas": "/abs/atlas_00.png", "label": "cap_00",
+           "row0_pct": 39.46, "total_pct": 116.41,
+           "differ_px": 0, "meanabs": 0.0},
+          ...
+        ]
+      }
+
+    Each atlas is a single PNG laid out as row 0 = [left | right] (always
+    shown) and row 1 = amplified diff (revealed on click); row0_pct/total_pct
+    are the clip heights as a % of atlas width, exactly as
+    openrecet tools/comparison_page.py emits them.
+    """
+    spec_path = Path(args.spec)
+    if not spec_path.is_file():
+        print(f"feed comparison: spec not found: {spec_path}", file=sys.stderr)
+        return 1
+    spec = json.loads(spec_path.read_text())
+    panels_in = spec.get("panels") or []
+    if not panels_in:
+        print("feed comparison: spec has no panels", file=sys.stderr)
+        return 1
+
+    item_id = _new_id()
+    panels_out = []
+    for i, p in enumerate(panels_in):
+        atlas = Path(p["atlas"])
+        if not atlas.is_file():
+            print(f"feed comparison: atlas missing: {atlas}", file=sys.stderr)
+            continue
+        url = _copy_asset(atlas, item_id, f"atlas_{i:02d}.png")
+        panels_out.append({
+            "src":       url,
+            "label":     p.get("label", f"cap_{i:02d}"),
+            "row0_pct":  float(p.get("row0_pct", 50.0)),
+            "total_pct": float(p.get("total_pct", 100.0)),
+            "differ_px": p.get("differ_px"),
+            "meanabs":   p.get("meanabs"),
+            "source":    str(atlas.resolve()),
+        })
+    if not panels_out:
+        print("feed comparison: no usable panels", file=sys.stderr)
+        return 1
+
+    entry = {
+        "id":          item_id,
+        "ts":          _now().timestamp(),
+        "iso":         _now().isoformat(timespec="seconds"),
+        "type":        "comparison",
+        "title":       args.title or spec.get("title") or "comparison",
+        "note":        args.note or spec.get("note", ""),
+        "left_label":  spec.get("left_label", "left"),
+        "right_label": spec.get("right_label", "right"),
+        "panels":      panels_out,
+    }
+    _append(entry)
+    print(f"pushed comparison '{entry['title']}' "
+          f"({len(panels_out)} panels) → {_feed_url()}")
+    return 0
+
+
+# ─── get / clear / list ─────────────────────────────────────────────────────
+
+
+def cmd_get(args) -> int:
+    """Print the full stored entry for an id (exact, or unique prefix), so a
+    pasted anchor resurfaces its description + original frame paths."""
+    matches = [e for e in _read_feed()
+               if e.get("id") == args.id or e.get("id", "").startswith(args.id)]
+    if not matches:
+        print(f"feed get: no entry matching id {args.id!r}", file=sys.stderr)
+        return 1
+    if len(matches) > 1:
+        print(f"feed get: {len(matches)} entries match prefix {args.id!r}: "
+              + ", ".join(e["id"] for e in matches), file=sys.stderr)
+        return 1
+    print(json.dumps(matches[0], indent=2))
     return 0
 
 
@@ -319,6 +415,20 @@ def main(argv: list[str] | None = None) -> int:
     sm.add_argument("--labels", default=None, help="comma-separated per-frame labels")
     sm.add_argument("--note", default="")
     sm.set_defaults(func=cmd_montage)
+
+    sc = sub.add_parser("comparison",
+                        help="push a port|retail click-to-reveal-diff item "
+                             "(like runs/comparisons/index.html)")
+    sc.add_argument("--spec", required=True,
+                    help="JSON spec of pre-built atlas PNGs + geometry "
+                         "(see cmd_comparison docstring)")
+    sc.add_argument("--title", default="")
+    sc.add_argument("--note", default="")
+    sc.set_defaults(func=cmd_comparison)
+
+    sg = sub.add_parser("get", help="print the full stored entry for an id/prefix")
+    sg.add_argument("id")
+    sg.set_defaults(func=cmd_get)
 
     sub.add_parser("clear", help="wipe the feed").set_defaults(func=cmd_clear)
     sub.add_parser("list",  help="print feed entries").set_defaults(func=cmd_list)
