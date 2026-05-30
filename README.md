@@ -45,3 +45,7 @@ item's images under `data/assets/<id>/`. The single-page app polls
 
 This is the **live** feed. The persistent offline comparison gallery
 (openrecet `runs/comparisons/index.html`) is a separate artifact and stays as-is.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
