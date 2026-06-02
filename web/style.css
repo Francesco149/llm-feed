@@ -89,3 +89,19 @@ main { max-width: 1100px; margin: 0 auto; padding: 16px; }
 .lb-label { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%);
             font: 13px ui-monospace, monospace; color: #ffe678; background: rgba(0,0,0,.5);
             padding: 3px 10px; border-radius: 4px; }
+
+/* ── drag-to-select a region of any image (coords → clipboard) ──────────────
+ * Drag a box on an image to copy its bounding rect in the image's NATURAL
+ * pixels to the clipboard; a plain click still zooms/toggles as before. */
+img.selectable { cursor: crosshair; }
+.box-sel { position: fixed; z-index: 9000; pointer-events: none;
+           border: 1.5px solid #ffe678; background: rgba(255,230,120,.18);
+           box-shadow: 0 0 0 1px rgba(0,0,0,.6); }
+.crop-toast { position: fixed; z-index: 9001; left: 50%; bottom: 24px;
+              transform: translateX(-50%); max-width: 92vw;
+              background: rgba(20,21,26,.96); color: var(--ok);
+              border: 1px solid var(--ok); border-radius: 6px;
+              padding: 8px 12px; font: 12px ui-monospace, monospace;
+              white-space: pre-wrap; word-break: break-all;
+              box-shadow: 0 4px 18px rgba(0,0,0,.5); animation: fade .15s ease; }
+.crop-toast.err { color: #ef4444; border-color: #ef4444; }

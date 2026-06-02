@@ -43,6 +43,22 @@ $P clear
   `feed.py`'s `cmd_comparison` docstring. (In the openrecet project,
   `tools/push_comparison.py` builds + pushes one for a scenario.)
 
+## Region select (user → agent)
+
+On any pushed image (inline, comparison atlas, or in the zoom lightbox) the user
+can **drag a box** to copy its bounding rect — in that image's *natural* pixels
+— to the clipboard. A plain click still zooms/toggles. The copied string is
+self-describing and pasted straight back to you:
+
+```
+crop id=<push-id> box=<x0>,<y0>,<x1>,<y1> size=<W>x<H> [frame=<label>] [src=<data/…png>]
+```
+
+`box` is `x0,y0,x1,y1` in the image's own pixels (origin top-left). Use `src`
+to open the asset directly, or `feed.py get <id>` to recover the original source
+path; then crop to `box` (and, for an atlas/comparison, map the box to the right
+panel using the comparison geometry).
+
 ## Looking a push back up
 
 When the user pastes an anchor id, run `feed.py get <id>` — it prints the full

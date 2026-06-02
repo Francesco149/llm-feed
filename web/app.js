@@ -44,6 +44,111 @@ function copyAnchor(id, node) {
   }
 }
 
+// ─── drag-to-select a region of an image → coords to clipboard ───────────────
+// Works on any <img>. A drag (> a few px) selects a box and copies its bounding
+// rect in the image's NATURAL pixels to the clipboard; a plain click falls
+// through to onClick (zoom / toggle). The copied string is self-describing so
+// it can be pasted straight back to the agent: it names the push id, the source
+// path, the image's natural size, and the box as x0,y0,x1,y1.
+
+let cropToastEl = null, cropToastTimer = 0;
+function showCropToast(text, isErr) {
+  if (cropToastEl) cropToastEl.remove();
+  cropToastEl = el("div", "crop-toast" + (isErr ? " err" : ""), text);
+  document.body.appendChild(cropToastEl);
+  clearTimeout(cropToastTimer);
+  cropToastTimer = setTimeout(() => {
+    if (cropToastEl) { cropToastEl.remove(); cropToastEl = null; }
+  }, 4000);
+}
+
+function copyToClipboard(text, onOk, onErr) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(onOk, onErr || onOk);
+  } else {
+    const t = document.createElement("textarea");
+    t.value = text; document.body.appendChild(t); t.select();
+    let ok = false; try { ok = document.execCommand("copy"); } catch (_) {}
+    t.remove(); (ok ? onOk : (onErr || onOk))();
+  }
+}
+
+// getMeta() → { id, src, label? } describing the image's CURRENT content
+// (the lightbox re-reads it per frame). onClick() fires on a plain click.
+function attachBoxSelect(img, getMeta, onClick) {
+  img.classList.add("selectable");
+  const DRAG_MIN = 4;
+  let sx = 0, sy = 0, dragging = false, moved = false, box = null;
+
+  const clampToImg = (cx, cy) => {
+    const r = img.getBoundingClientRect();
+    return [Math.min(Math.max(cx, r.left), r.right),
+            Math.min(Math.max(cy, r.top),  r.bottom)];
+  };
+  const toNatural = (cx, cy) => {
+    const r = img.getBoundingClientRect();
+    const nx = (cx - r.left) / r.width  * (img.naturalWidth  || r.width);
+    const ny = (cy - r.top)  / r.height * (img.naturalHeight || r.height);
+    return [Math.round(nx), Math.round(ny)];
+  };
+
+  img.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    dragging = true; moved = false;
+    sx = e.clientX; sy = e.clientY;
+    try { img.setPointerCapture(e.pointerId); } catch (_) {}
+    e.preventDefault();
+  });
+
+  img.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    if (!moved && Math.abs(e.clientX - sx) + Math.abs(e.clientY - sy) < DRAG_MIN)
+      return;
+    moved = true;
+    e.stopPropagation();
+    const [ax, ay] = clampToImg(sx, sy);
+    const [bx, by] = clampToImg(e.clientX, e.clientY);
+    if (!box) { box = el("div", "box-sel"); document.body.appendChild(box); }
+    box.style.left   = Math.min(ax, bx) + "px";
+    box.style.top    = Math.min(ay, by) + "px";
+    box.style.width  = Math.abs(bx - ax) + "px";
+    box.style.height = Math.abs(by - ay) + "px";
+  });
+
+  const finish = (e) => {
+    if (!dragging) return;
+    dragging = false;
+    try { img.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (box) { box.remove(); box = null; }
+    if (!moved) { if (onClick) onClick(); return; }
+    e.stopPropagation();
+    const [ax, ay] = clampToImg(sx, sy);
+    const [bx, by] = clampToImg(e.clientX, e.clientY);
+    const [x0, y0] = toNatural(Math.min(ax, bx), Math.min(ay, by));
+    const [x1, y1] = toNatural(Math.max(ax, bx), Math.max(ay, by));
+    if (x1 - x0 < 1 || y1 - y0 < 1) return;          // too small — ignore
+    const m = (getMeta && getMeta()) || {};
+    const W = img.naturalWidth, H = img.naturalHeight;
+    let s = `crop id=${m.id || "?"} box=${x0},${y0},${x1},${y1}` +
+            ` size=${W}x${H}`;
+    if (m.label) s += ` frame=${m.label}`;
+    if (m.src)   s += ` src=${m.src}`;
+    copyToClipboard(s,
+      () => showCropToast("copied ✓  " + s, false),
+      () => showCropToast("(copy failed — select & copy)\n" + s, true));
+  };
+  img.addEventListener("pointerup", finish);
+  img.addEventListener("pointercancel", () => {
+    dragging = false; if (box) { box.remove(); box = null; }
+  });
+  // Swallow the native click so all click behaviour routes through onClick
+  // above (no double-toggle on comparison wrappers, no bubble to the lightbox
+  // backdrop). The drag-vs-click decision already happened in finish().
+  img.addEventListener("click", (e) => {
+    e.stopPropagation(); e.preventDefault();
+  }, true);
+}
+
 function cardHeader(entry) {
   const h = el("h2");
   h.appendChild(el("span", "badge", entry.type));
@@ -72,9 +177,10 @@ function renderImage(entry) {
   const img = el("img", "single");
   img.src = "/" + entry.src;
   img.alt = entry.title || "";
-  img.style.cursor = "zoom-in";
-  img.addEventListener("click", () =>
-    openLightbox([{ src: entry.src, label: entry.title || "" }], 0, entry.title || "image"));
+  attachBoxSelect(img,
+    () => ({ id: entry.id, src: entry.src }),
+    () => openLightbox([{ src: entry.src, label: entry.title || "" }], 0,
+                       entry.title || "image", { id: entry.id }));
   card.appendChild(img);
   return card;
 }
@@ -95,7 +201,7 @@ function renderMontage(entry) {
     tile.appendChild(img);
     if (fr.label) tile.appendChild(el("span", "tl", fr.label));
     tile.addEventListener("click", () =>
-      openLightbox(entry.frames, i, entry.title || "montage"));
+      openLightbox(entry.frames, i, entry.title || "montage", { id: entry.id }));
     grid.appendChild(tile);
   });
   card.appendChild(grid);
@@ -120,8 +226,13 @@ function renderComparison(entry) {
     img.src = "/" + p.src;
     img.loading = "lazy";
     img.alt = p.label || "";
+    // Box-select copies coords in the ATLAS's natural pixels (the agent maps
+    // them to a panel by the comparison geometry); a plain click toggles the
+    // diff reveal as before.
+    attachBoxSelect(img,
+      () => ({ id: entry.id, src: p.src, label: p.label }),
+      () => wrap.classList.toggle("open"));
     wrap.appendChild(img);
-    wrap.addEventListener("click", () => wrap.classList.toggle("open"));
     cap.appendChild(wrap);
 
     let stat = "";
@@ -189,7 +300,7 @@ const lbImg      = document.getElementById("lb-img");
 const lbTitle    = document.getElementById("lb-title");
 const lbCounter  = document.getElementById("lb-counter");
 const lbLabel    = document.getElementById("lb-label");
-let lbFrames = [], lbIdx = 0;
+let lbFrames = [], lbIdx = 0, lbMeta = {};
 
 function lbShow() {
   const fr = lbFrames[lbIdx];
@@ -200,13 +311,25 @@ function lbShow() {
   lbCounter.textContent = `${lbIdx + 1} / ${lbFrames.length}`;
 }
 
-function openLightbox(frames, idx, title) {
+function openLightbox(frames, idx, title, meta) {
   lbFrames = frames || [];
   lbIdx = Math.max(0, Math.min(idx || 0, lbFrames.length - 1));
+  lbMeta = meta || {};
   lbTitle.textContent = title || "";
   lb.classList.remove("hidden");
   lbShow();
 }
+
+// Box-select in the zoom view → coords in the (full-res) frame's natural
+// pixels.  Covers montage frames (object-fit:cover thumbnails are imprecise;
+// the lightbox shows the whole frame) and single images.  A plain click is a
+// no-op here (the lightbox is already the zoomed view).
+attachBoxSelect(lbImg,
+  () => {
+    const fr = lbFrames[lbIdx] || {};
+    return { id: lbMeta.id, src: fr.src, label: fr.label };
+  },
+  () => {});
 function closeLightbox() { lb.classList.add("hidden"); lbImg.removeAttribute("src"); }
 function lbStep(d) {
   if (!lbFrames.length) return;
