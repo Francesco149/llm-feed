@@ -154,7 +154,36 @@ def _gather_frames(args) -> list[Path]:
     return uniq
 
 
+def _is_trace_export_dir(p: Path) -> Path | None:
+    """If `p` (or its parent, when `p` is a frames/ subdir) is a trace-export dir
+    — i.e. carries meta.jsonl + global.json next to the frames — return the
+    export root, else None. Used to steer recorded/driven traces to the `trace`
+    card instead of `montage` (see docs/trace-workflow.md)."""
+    for cand in (p, p.parent):
+        if (cand / "meta.jsonl").is_file() and (cand / "global.json").is_file():
+            return cand
+    return None
+
+
 def cmd_montage(args) -> int:
+    # Unambiguous tooling: a trace-export dir (frames/ + meta.jsonl + global.json)
+    # is a recorded/driven TRACE — push it with the `trace` card so frame refs are
+    # anchor-relative and the runnable trace round-trips. Refuse to flatten it into
+    # a montage (which drops the meta, the round-trip, and the stable numbering).
+    # Override with --force for a deliberate plain grid.
+    if args.frames_dir and not getattr(args, "force", False):
+        root = _is_trace_export_dir(Path(args.frames_dir))
+        if root is not None:
+            print(
+                f"feed montage: '{args.frames_dir}' is a TRACE-EXPORT dir "
+                f"(has meta.jsonl + global.json).\n"
+                f"  Push it as a trace so frame refs survive replay jitter and it "
+                f"round-trips:\n"
+                f"    feed.py trace --dir {root}\n"
+                f"  (re-run with --force to flatten into a plain montage anyway)",
+                file=sys.stderr)
+            return 2
+
     frames = _gather_frames(args)
     if not frames:
         print("feed montage: no frames found (use --frames-dir/--glob or --frames)",
@@ -551,6 +580,9 @@ def main(argv: list[str] | None = None) -> int:
     sm.add_argument("--cols", type=int, default=3)
     sm.add_argument("--labels", default=None, help="comma-separated per-frame labels")
     sm.add_argument("--note", default="")
+    sm.add_argument("--force", action="store_true",
+                    help="push as a montage even if --frames-dir is a trace-export "
+                         "dir (default: refuse and point to `feed.py trace`)")
     sm.set_defaults(func=cmd_montage)
 
     sc = sub.add_parser("comparison",
