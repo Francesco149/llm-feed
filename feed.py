@@ -269,6 +269,135 @@ def cmd_comparison(args) -> int:
     return 0
 
 
+# ─── push: trace (frame-by-frame TAS trace viewer) ──────────────────────────
+
+
+def cmd_trace(args) -> int:
+    """Push a `trace` item — a contiguous frame window from a TAS recording with
+    per-frame + whole-trace metadata, opened in a dedicated frame-stepping viewer
+    (web/trace.html). Ingests an export dir produced by openrecet
+    tools/export_trace.py:
+
+        <dir>/frames/frame_NNNNN.png   every frame in the window
+        <dir>/meta.jsonl              one {"frame":N, ...per-frame blob...} per frame
+        <dir>/global.json             {rng_seed_at_start, trace_jsonl, ...}
+
+    Each frame's metadata row is paired (by frame number) into frames[i].data;
+    global.json travels verbatim as `global` (it carries the runnable
+    trace_jsonl ops array, so the entry round-trips back to a replayable
+    .jsonl via `feed.py trace-export`).
+    """
+    d = Path(args.dir)
+    frames_dir = d / "frames"
+    meta_path = d / "meta.jsonl"
+    global_path = d / "global.json"
+    if not frames_dir.is_dir():
+        print(f"feed trace: frames dir not found: {frames_dir}", file=sys.stderr)
+        return 1
+
+    frame_files = sorted(
+        (p for p in frames_dir.glob("frame_*")
+         if p.is_file() and p.suffix.lower() in IMAGE_EXTS),
+        key=_frame_no)
+    if not frame_files:
+        print(f"feed trace: no frame_*.png in {frames_dir}", file=sys.stderr)
+        return 1
+
+    # Per-frame metadata, keyed by frame number.
+    meta_by_frame: dict[int, dict] = {}
+    if meta_path.is_file():
+        for line in meta_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                o = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "frame" in o:
+                meta_by_frame[int(o["frame"])] = o
+
+    global_blob: dict = {}
+    if global_path.is_file():
+        try:
+            global_blob = json.loads(global_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            print(f"feed trace: WARNING bad global.json in {d}", file=sys.stderr)
+
+    item_id = _new_id()
+    frame_entries = []
+    for i, fp in enumerate(frame_files):
+        n = _frame_no(fp)
+        ext = fp.suffix.lower() if fp.suffix.lower() in IMAGE_EXTS else ".png"
+        url = _copy_asset(fp, item_id, f"frame_{i:04d}{ext}")
+        frame_entries.append({
+            "src":   url,
+            "n":     n,
+            "label": f"f={n}" if n >= 0 else fp.stem,
+            "data":  meta_by_frame.get(n, {}),
+        })
+
+    fps = args.fps if args.fps is not None else int(global_blob.get("fps", 20) or 20)
+    entry = {
+        "id":     item_id,
+        "ts":     _now().timestamp(),
+        "iso":    _now().isoformat(timespec="seconds"),
+        "type":   "trace",
+        "title":  args.title or global_blob.get("name") or f"trace ({len(frame_entries)} frames)",
+        "note":   args.note or "",
+        "fps":    fps,
+        "frames": frame_entries,
+        "global": global_blob,
+        # Original export dir, for `feed.py get <id>` retrieval.
+        "export_dir": str(d.resolve()),
+    }
+    _append(entry)
+    print(f"pushed trace '{entry['title']}' ({len(frame_entries)} frames, "
+          f"{fps} fps) → {_feed_url()}trace.html?id={item_id}")
+    return 0
+
+
+# ─── round-trip: reconstruct a runnable trace from a feed entry ──────────────
+
+
+def cmd_trace_export(args) -> int:
+    """Write a `trace` entry's runnable segtrace ops (global.trace_jsonl) to a
+    .jsonl file. That file replays directly:
+
+        openrecet tools/run-openrecet.sh --input-segtrace out.jsonl
+
+    and carries the {rngseed}/{esc}/{caprange} ops, so it reproduces the exact
+    frames the viewer shows (rng-pinned). Closes the loop:
+    record → export → feed → (mark a frame) → trace-export → replay."""
+    matches = [e for e in _read_feed()
+               if e.get("id") == args.id or e.get("id", "").startswith(args.id)]
+    if not matches:
+        print(f"feed trace-export: no entry matching id {args.id!r}", file=sys.stderr)
+        return 1
+    if len(matches) > 1:
+        print(f"feed trace-export: {len(matches)} entries match prefix {args.id!r}",
+              file=sys.stderr)
+        return 1
+    entry = matches[0]
+    if entry.get("type") != "trace":
+        print(f"feed trace-export: entry {entry['id']} is type "
+              f"{entry.get('type')!r}, not 'trace'", file=sys.stderr)
+        return 1
+    ops = (entry.get("global") or {}).get("trace_jsonl") or []
+    if not ops:
+        print(f"feed trace-export: entry {entry['id']} has no global.trace_jsonl "
+              "(re-export with a newer export_trace.py)", file=sys.stderr)
+        return 1
+    out = Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    with out.open("w", encoding="utf-8") as f:
+        for op in ops:
+            f.write(json.dumps(op) + "\n")
+    print(f"feed trace-export: {len(ops)} ops → {out}")
+    print(f"  replay: tools/run-openrecet.sh --input-segtrace {out}")
+    return 0
+
+
 # ─── get / clear / list ─────────────────────────────────────────────────────
 
 
@@ -303,9 +432,13 @@ def cmd_clear(args) -> int:
 
 def cmd_list(args) -> int:
     for e in _read_feed():
-        extra = (f"{len(e.get('frames', []))} frames"
-                 if e["type"] == "montage" else e.get("src", ""))
-        print(f"{e['iso']}  {e['type']:8}  {e['title']}  [{extra}]")
+        if e["type"] in ("montage", "trace"):
+            extra = f"{len(e.get('frames', []))} frames"
+        elif e["type"] == "comparison":
+            extra = f"{len(e.get('panels', []))} panels"
+        else:
+            extra = e.get("src", "")
+        print(f"{e['iso']}  {e['type']:10}  {e['title']}  [{extra}]")
     return 0
 
 
@@ -350,6 +483,10 @@ def cmd_serve(args) -> int:
                 return
             if path == "/app.js":
                 return self._send_file(WEB / "app.js", "application/javascript")
+            if path == "/trace.html":
+                return self._send_file(WEB / "trace.html", "text/html; charset=utf-8")
+            if path == "/trace.js":
+                return self._send_file(WEB / "trace.js", "application/javascript")
             if path == "/style.css":
                 return self._send_file(WEB / "style.css", "text/css")
             if path == "/data/feed.jsonl":
@@ -425,6 +562,22 @@ def main(argv: list[str] | None = None) -> int:
     sc.add_argument("--title", default="")
     sc.add_argument("--note", default="")
     sc.set_defaults(func=cmd_comparison)
+
+    st = sub.add_parser("trace",
+                        help="push a frame-by-frame TAS trace (export_trace.py dir)")
+    st.add_argument("--dir", required=True,
+                    help="export dir (frames/ + meta.jsonl + global.json)")
+    st.add_argument("--title", default="")
+    st.add_argument("--note", default="")
+    st.add_argument("--fps", type=int, default=None,
+                    help="playback fps (default: global.json fps or 20)")
+    st.set_defaults(func=cmd_trace)
+
+    se = sub.add_parser("trace-export",
+                        help="reconstruct a runnable .jsonl from a trace entry")
+    se.add_argument("id")
+    se.add_argument("-o", "--out", required=True, help="output .jsonl path")
+    se.set_defaults(func=cmd_trace_export)
 
     sg = sub.add_parser("get", help="print the full stored entry for an id/prefix")
     sg.add_argument("id")

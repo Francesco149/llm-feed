@@ -164,6 +164,8 @@ function cardHeader(entry) {
   let extra = "";
   if (entry.type === "montage")
     extra = ` · ${entry.frames.length} frames · ${entry.cols} cols`;
+  else if (entry.type === "trace")
+    extra = ` · ${entry.frames.length} frames · ${entry.fps || 20} fps`;
   else if (entry.type === "comparison")
     extra = ` · ${entry.panels.length} panels · ${entry.left_label} | ${entry.right_label}`;
   if (extra) meta.appendChild(document.createTextNode(extra));
@@ -246,9 +248,52 @@ function renderComparison(entry) {
   return card;
 }
 
+// A `trace` card: an animated preview that flip-cycles the captured frames at
+// the trace's fps (JS-driven, so feed.py stays stdlib-only — no GIF baking).
+// Clicking "open viewer" opens the dedicated frame-stepper in a new tab.
+function renderTrace(entry) {
+  const card = el("div", "card");
+  cardHeader(entry).forEach(n => card.appendChild(n));
+  if (entry.note) card.appendChild(el("div", "note", entry.note));
+
+  const frames = entry.frames || [];
+  const wrap = el("div", "trace-card-img");
+  const img = el("img");
+  img.loading = "lazy";
+  if (frames[0]) img.src = "/" + frames[0].src;
+  const badge = el("div", "tc-badge", frames.length ? `1 / ${frames.length}` : "");
+  wrap.appendChild(img);
+  wrap.appendChild(badge);
+
+  // Cycle frames at fps; pause on hover so a frame can be inspected.
+  let i = 0, timer = 0;
+  const fps = Math.max(1, entry.fps || 20);
+  const tick = () => {
+    if (!frames.length) return;
+    i = (i + 1) % frames.length;
+    img.src = "/" + frames[i].src;
+    badge.textContent = `${i + 1} / ${frames.length}`;
+  };
+  const start = () => { if (!timer && frames.length > 1) timer = setInterval(tick, Math.round(1000 / fps)); };
+  const stop  = () => { if (timer) { clearInterval(timer); timer = 0; } };
+  wrap.addEventListener("mouseenter", stop);
+  wrap.addEventListener("mouseleave", start);
+  // Clicking the preview opens the viewer too (same as the link).
+  wrap.addEventListener("click", () => window.open(`/trace.html?id=${entry.id}`, "_blank"));
+  start();
+
+  card.appendChild(wrap);
+  const open = el("a", "trace-open", "▶ open frame-by-frame viewer →");
+  open.href = `/trace.html?id=${entry.id}`;
+  open.target = "_blank";
+  card.appendChild(open);
+  return card;
+}
+
 function renderEntry(entry) {
   if (entry.type === "image")      return renderImage(entry);
   if (entry.type === "montage")    return renderMontage(entry);
+  if (entry.type === "trace")      return renderTrace(entry);
   if (entry.type === "comparison") return renderComparison(entry);
   // Unknown/future type: show its title + a raw note so nothing is silently dropped.
   const card = el("div", "card");
@@ -257,20 +302,79 @@ function renderEntry(entry) {
   return card;
 }
 
-function ingest(entries) {
-  let added = 0;
-  for (const entry of entries) {           // oldest → newest
-    if (!entry || !entry.id || seen.has(entry.id)) continue;
-    seen.add(entry.id);
+// ─── pagination ─────────────────────────────────────────────────────────────
+// The feed can grow unbounded, so only the newest PAGE_SIZE items render on the
+// first load; the older backlog hides behind a "Load more" button (+PAGE_SIZE
+// per click). NEW items arriving via polling always render on top regardless of
+// the cap — they never push already-loaded items back into the backlog.
+
+const PAGE_SIZE = 10;
+let pending = [];            // older backlog, newest→oldest, not yet rendered
+let firstLoad = true;
+let loadMoreBtn = null;
+
+function updateCount() {
+  const extra = pending.length ? ` (+${pending.length} older)` : "";
+  countEl.textContent = `${total} item${total === 1 ? "" : "s"}${extra}`;
+}
+
+function renderLoadMore() {
+  if (!loadMoreBtn) {
+    loadMoreBtn = el("button", "load-more");
+    loadMoreBtn.addEventListener("click", loadMore);
+    feedEl.appendChild(loadMoreBtn);
+  }
+  if (!pending.length) {
+    loadMoreBtn.remove(); loadMoreBtn = null; return;
+  }
+  // Keep it last in the feed (older items insert above it).
+  feedEl.appendChild(loadMoreBtn);
+  const n = Math.min(PAGE_SIZE, pending.length);
+  loadMoreBtn.textContent = `load ${n} more older ${n === 1 ? "item" : "items"} `
+    + `(${pending.length} hidden)`;
+}
+
+function loadMore() {
+  const take = pending.splice(0, PAGE_SIZE);   // newest-of-the-old first
+  for (const entry of take) {                  // append above the button, in order
     const card = renderEntry(entry);
-    feedEl.insertBefore(card, feedEl.firstChild);   // prepend → newest on top
-    added++; total++;
+    if (loadMoreBtn) feedEl.insertBefore(card, loadMoreBtn);
+    else feedEl.appendChild(card);
+    total++;
   }
+  renderLoadMore();
+  updateCount();
+}
+
+function ingest(entries) {
+  // entries: full feed in append order (oldest → newest).
+  const fresh = entries.filter(e => e && e.id && !seen.has(e.id));
+  if (!fresh.length) return;
+  for (const e of fresh) seen.add(e.id);
+
+  let addedTop = 0;
+  if (firstLoad) {
+    firstLoad = false;
+    // Newest PAGE_SIZE render now; the rest become the (newest→oldest) backlog.
+    const head = fresh.slice(-PAGE_SIZE);            // newest PAGE_SIZE (oldest→newest)
+    const tail = fresh.slice(0, -PAGE_SIZE);         // older backlog (oldest→newest)
+    for (const entry of head) {
+      feedEl.insertBefore(renderEntry(entry), feedEl.firstChild);  // → newest on top
+      total++; addedTop++;
+    }
+    pending = tail.reverse();                        // newest→oldest for Load more
+    renderLoadMore();
+  } else {
+    // Subsequent polls only see genuinely new (appended) items — always on top.
+    for (const entry of fresh) {                     // oldest→newest → newest ends on top
+      feedEl.insertBefore(renderEntry(entry), feedEl.firstChild);
+      total++; addedTop++;
+    }
+  }
+
   if (total > 0 && emptyEl) emptyEl.remove();
-  if (added) {
-    countEl.textContent = `${total} item${total === 1 ? "" : "s"}`;
-    if (autoEl.checked) window.scrollTo({ top: 0, behavior: "smooth" });
-  }
+  updateCount();
+  if (addedTop && autoEl.checked) window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
 async function poll() {

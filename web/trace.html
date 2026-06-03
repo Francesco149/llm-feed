@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>trace viewer · llm-feed</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="trace-body">
+<header>
+  <h1><a href="/" class="back">← feed</a> · <span id="tv-title">trace viewer</span></h1>
+  <div class="status">
+    <span id="tv-status">loading…</span>
+    <span class="sep">·</span>
+    <span id="tv-id" class="anchor" title="click to copy this trace id"></span>
+  </div>
+</header>
+
+<main class="trace-main">
+  <div id="tv-note" class="note"></div>
+
+  <div class="tv-stage">
+    <div class="tv-viewport">
+      <img id="tv-img" alt="">
+      <div id="tv-overlay" class="tv-overlay"></div>
+    </div>
+
+    <div class="tv-controls">
+      <button id="tv-first" title="first frame (Home)">⏮</button>
+      <button id="tv-back10" title="−10 (←)">−10</button>
+      <button id="tv-back1" title="−1 (,)">−1</button>
+      <span id="tv-pos" class="tv-pos">0 / 0</span>
+      <button id="tv-fwd1" title="+1 (.)">+1</button>
+      <button id="tv-fwd10" title="+10 (→)">+10</button>
+      <button id="tv-last" title="last frame (End)">⏭</button>
+      <span class="tv-spacer"></span>
+      <button id="tv-play" title="play / pause (space)">▶ play</button>
+      <button id="tv-mark" title="mark this frame as a capture (c)">◉ mark</button>
+    </div>
+
+    <div class="tv-hint">
+      ←/→ = ±10 · ,/. = ±1 · Home/End = ends · space = play/pause ·
+      <b>c</b> = mark capture · drag a box on the frame to copy a crop reference
+    </div>
+  </div>
+
+  <div class="tv-panels">
+    <section class="tv-panel">
+      <h3>marked captures <button id="tv-copycaps" class="tv-mini">copy</button></h3>
+      <div id="tv-caps" class="tv-caps">(none — press <b>c</b> on a frame)</div>
+    </section>
+
+    <section class="tv-panel">
+      <h3>frame data</h3>
+      <pre id="tv-data" class="tv-json"></pre>
+    </section>
+
+    <section class="tv-panel">
+      <h3>global <button id="tv-toggle-global" class="tv-mini">show</button></h3>
+      <pre id="tv-global" class="tv-json hidden"></pre>
+    </section>
+  </div>
+</main>
+
+<script src="/trace.js"></script>
+</body>
+</html>
