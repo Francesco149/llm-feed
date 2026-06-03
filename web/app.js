@@ -377,18 +377,26 @@ function ingest(entries) {
   if (addedTop && autoEl.checked) window.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+let pollFails = 0; // tolerate transient hiccups before declaring the server offline
+
 async function poll() {
   try {
-    const res = await fetch("/data/feed.jsonl?t=" + Date.now(), { cache: "no-store" });
+    // No cache-buster: "no-cache" revalidates with the server's ETag, so an unchanged
+    // feed comes back as a 304 (served from the browser cache) instead of re-downloading
+    // the whole file every tick — which is what was hammering the server.
+    const res = await fetch("/data/feed.jsonl", { cache: "no-cache" });
     if (!res.ok) throw new Error("HTTP " + res.status);
     const text = await res.text();
     const entries = text.split("\n").map(l => l.trim()).filter(Boolean)
       .map(l => { try { return JSON.parse(l); } catch (_) { return null; } })
       .filter(Boolean);
     ingest(entries);
+    pollFails = 0;
     setLive(true);
   } catch (e) {
-    setLive(false);
+    // A single failed poll is usually just contention; only flip to "offline" after a few
+    // in a row, so the status doesn't flicker under load.
+    if (++pollFails >= 3) setLive(false);
   }
 }
 

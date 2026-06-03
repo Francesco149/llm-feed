@@ -487,52 +487,79 @@ def cmd_serve(args) -> int:
                 return
             sys.stderr.write("feed: " + (fmt % a) + "\n")
 
-        def _send_file(self, path: Path, ctype: str | None = None):
+        def _send_file(self, path: Path, ctype: str | None = None,
+                       cache: str = "no-store", conditional: bool = False):
             if not path.is_file():
                 self.send_error(404)
                 return
             ctype = ctype or (mimetypes.guess_type(str(path))[0]
                               or "application/octet-stream")
+            try:
+                st = path.stat()
+            except OSError:
+                self.send_error(404)
+                return
+            # An ETag (mtime+size) lets the browser revalidate cheaply: an unchanged file —
+            # e.g. the multi-MB feed.jsonl polled every 1.5 s — comes back as a tiny 304 instead
+            # of re-sending the whole body, and immutable image assets are never re-fetched.
+            etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+            if conditional and self.headers.get("If-None-Match") == etag:
+                self.send_response(304)
+                self.send_header("ETag", etag)
+                self.send_header("Cache-Control", cache)
+                self.end_headers()
+                return
             data = path.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(data)))
-            # The feed file + assets must never be cached or polling goes stale.
-            self.send_header("Cache-Control", "no-store")
+            self.send_header("Cache-Control", cache)
+            self.send_header("ETag", etag)
             self.end_headers()
             self.wfile.write(data)
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
+            # Static app shell: revalidate via ETag so updates show but unchanged → 304.
             if path in ("/", "/index.html"):
-                return self._send_file(WEB / "index.html", "text/html; charset=utf-8")
+                return self._send_file(WEB / "index.html", "text/html; charset=utf-8",
+                                       cache="no-cache", conditional=True)
             if path == "/healthz":
                 self.send_response(200); self.end_headers()
                 self.wfile.write(b"ok")
                 return
             if path == "/app.js":
-                return self._send_file(WEB / "app.js", "application/javascript")
+                return self._send_file(WEB / "app.js", "application/javascript",
+                                       cache="no-cache", conditional=True)
             if path == "/trace.html":
-                return self._send_file(WEB / "trace.html", "text/html; charset=utf-8")
+                return self._send_file(WEB / "trace.html", "text/html; charset=utf-8",
+                                       cache="no-cache", conditional=True)
             if path == "/trace.js":
-                return self._send_file(WEB / "trace.js", "application/javascript")
+                return self._send_file(WEB / "trace.js", "application/javascript",
+                                       cache="no-cache", conditional=True)
             if path == "/style.css":
-                return self._send_file(WEB / "style.css", "text/css")
+                return self._send_file(WEB / "style.css", "text/css",
+                                       cache="no-cache", conditional=True)
             if path == "/data/feed.jsonl":
-                # Always 200, even when empty, so the client polls cleanly.
+                # Always 200, even when empty, so the client polls cleanly. When it exists,
+                # serve it conditionally: the poll revalidates and gets a 304 until a push
+                # actually changes the file, instead of re-downloading megabytes every tick.
                 if not FEED.exists():
                     self.send_response(200)
                     self.send_header("Content-Type", "text/plain")
-                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Cache-Control", "no-cache")
                     self.end_headers()
                     return
-                return self._send_file(FEED, "text/plain; charset=utf-8")
+                return self._send_file(FEED, "text/plain; charset=utf-8",
+                                       cache="no-cache", conditional=True)
             if path.startswith("/data/assets/"):
-                # Resolve safely under ASSETS (no path traversal).
+                # Resolve safely under ASSETS (no path traversal). Assets are content-stable
+                # (a unique id per push), so cache them hard — this is what stops the browser
+                # re-downloading hundreds of trace frames on every re-render.
                 rel = path[len("/data/assets/"):]
                 target = (ASSETS / rel).resolve()
                 if ASSETS.resolve() in target.parents or target == ASSETS.resolve():
-                    return self._send_file(target)
+                    return self._send_file(target, cache="public, max-age=31536000, immutable")
                 self.send_error(403)
                 return
             self.send_error(404)

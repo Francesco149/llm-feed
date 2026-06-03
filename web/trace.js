@@ -243,7 +243,7 @@ async function load() {
   if (!id) { $("tv-status").textContent = "no ?id= in the URL"; return; }
   let entries = [];
   try {
-    const res = await fetch("/data/feed.jsonl?t=" + Date.now(), { cache: "no-store" });
+    const res = await fetch("/data/feed.jsonl", { cache: "no-cache" });
     const text = await res.text();
     entries = text.split("\n").map(l => l.trim()).filter(Boolean)
       .map(l => { try { return JSON.parse(l); } catch (_) { return null; } })
